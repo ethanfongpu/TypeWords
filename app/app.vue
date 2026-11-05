@@ -6,6 +6,7 @@ const siteOrigin = String(runtimeConfig.public.origin || 'https://typewords.cc')
 const canonicalURL = $computed(() => new URL(route.path, `${siteOrigin}/`).toString())
 
 const nonIndexableRoutePrefixes = [
+  '/scenarios',
   '/fsrs',
   '/import',
   '/practice-articles',

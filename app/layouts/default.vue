@@ -83,6 +83,10 @@ function onMouseLeave() {
             <IconFluentPin20Regular v-else class="flex-shrink-0 -transform-rotate-45" />
           </BaseIcon>
         </div>
+        <NuxtLink to="/scenarios" class="row" title="场景短课">
+          <IconFluentCommentEdit20Regular />
+          <span>场景短课</span>
+        </NuxtLink>
         <NuxtLink to="/words" class="row">
           <IconFluentTextUnderlineDouble20Regular />
           <span>{{ $t('words') }}</span>
@@ -128,6 +132,10 @@ function onMouseLeave() {
           <IconFluentTextUnderlineDouble20Regular />
           <span>{{ $t('words') }}</span>
         </div>
+        <NuxtLink to="/scenarios" class="nav-item" :class="{ active: route.path === '/scenarios' }">
+          <IconFluentCommentEdit20Regular />
+          <span>场景</span>
+        </NuxtLink>
         <div class="nav-item" @click="router.push('/articles')" :class="{ active: route.path?.includes('/articles') }">
           <IconFluentBookLetter20Regular />
           <span>{{ $t('articles') }}</span>

@@ -85,6 +85,8 @@ export function useExport() {
     const JSZip = await loadJsLib('JSZip', LIB_JS_URL.JSZIP)
     const zip = new JSZip()
     zip.file('data.json', JSON.stringify(await getExportedData()))
+    const { appendScenarioZip } = await import('../scenario/persistence')
+    await appendScenarioZip(zip)
     const mp3 = zip.folder('mp3')
     const allRecords = await get(LOCAL_FILE_KEY)
     for (const rec of allRecords ?? []) {

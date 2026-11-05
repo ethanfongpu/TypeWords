@@ -173,6 +173,7 @@ useSeoMeta({
         </div>
         <!-- Desktop nav links -->
         <nav class="hidden md:flex gap-7">
+          <NuxtLink to="/scenarios" class="font-medium text-[var(--hw-text-2)] no-underline hover:text-[var(--hw-text)] transition-colors duration-150">场景短课</NuxtLink>
           <NuxtLink
             to="/words"
             class="font-medium text-[var(--hw-text-2)] no-underline hover:text-[var(--hw-text)] transition-colors duration-150"

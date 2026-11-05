@@ -91,7 +91,7 @@ export const TourConfig = {
 export const LIB_JS_URL = {
   SHEPHERD: `${ENV.LIBS_URL}/Shepherd.14.5.1.mjs.js`,
   SNAPDOM: `${ENV.LIBS_URL}/snapdom.min.js`,
-  JSZIP: `${ENV.LIBS_URL}/jszip.min.js`,
+  JSZIP: `${ENV.LIBS_URL.replace(/\/$/, '')}/jszip.min.js`,
   XLSX: `${ENV.LIBS_URL}/xlsx.full.min.js`,
 }
 export const PronunciationApi = 'https://dict.youdao.com/dictvoice?audio='

@@ -30,6 +30,7 @@ import { useDataSyncPersistence } from '@/core/composables/useDataSyncPersistenc
 import SettingItem from '@/components/setting/SettingItem.vue'
 import { Supabase } from '@/core/utils/supabase.ts'
 import BackupGateDialog from '@/components/dialog/BackupGateDialog.vue'
+import { parseScenarioZip, restoreRecord, SCENARIO_LOCK } from '@/core/scenario/persistence'
 
 import { createClient } from '@supabase/supabase-js'
 import { useRoute } from 'vue-router'
@@ -255,8 +256,10 @@ async function importJson(str: string) {
     data.dict.val.load = true
     store.setState(data.dict.val)
     showBackupGate = false
+    return true
   } catch (err) {
-    return Toast.error(t('import_failed'))
+    Toast.error(t('import_failed'))
+    return false
   } finally {
     importLoading = false
   }
@@ -285,23 +288,50 @@ async function importData(e) {
         return Toast.error(t('missing_data_json'))
       }
 
-      const mp3Folder = zip.folder('mp3')
-      if (mp3Folder) {
-        const records: { id: string; file: Blob }[] = []
-        for (const filename in zip.files) {
-          if (filename.startsWith('mp3/') && filename.endsWith('.mp3')) {
-            const entry = zip.file(filename)
-            if (!entry) continue
-            const blob = await entry.async('blob')
-            const id = filename.replace(/^mp3\//, '').replace(/\.mp3$/, '')
-            records.push({ id, file: blob })
-          }
-        }
-        await set(LOCAL_FILE_KEY, records)
+      // Validate the optional module before touching any existing data. Restore it under the same writer lock as the lesson page.
+      const scenarioRecord = await parseScenarioZip(zip)
+      let releaseScenario: (() => void) | undefined
+      if (scenarioRecord) {
+        if (!navigator.locks) throw new Error('请使用新版 Chrome 或 Edge 恢复场景数据。')
+        const acquired = await new Promise<boolean>((resolve, reject) => {
+          void navigator.locks
+            .request(SCENARIO_LOCK, { ifAvailable: true }, async lock => {
+              if (!lock) {
+                resolve(false)
+                return
+              }
+              await new Promise<void>(release => {
+                releaseScenario = release
+                resolve(true)
+              })
+            })
+            .catch(reject)
+        })
+        if (!acquired) throw new Error('请先关闭场景学习标签，再恢复完整备份。')
       }
 
-      const str = await dataFile.async('string')
-      await importJson(str)
+      try {
+        const mp3Folder = zip.folder('mp3')
+        if (mp3Folder) {
+          const records: { id: string; file: Blob }[] = []
+          for (const filename in zip.files) {
+            if (filename.startsWith('mp3/') && filename.endsWith('.mp3')) {
+              const entry = zip.file(filename)
+              if (!entry) continue
+              const blob = await entry.async('blob')
+              const id = filename.replace(/^mp3\//, '').replace(/\.mp3$/, '')
+              records.push({ id, file: blob })
+            }
+          }
+          await set(LOCAL_FILE_KEY, records)
+        }
+
+        const str = await dataFile.async('string')
+        if (!(await importJson(str))) throw new Error(t('import_failed'))
+        if (scenarioRecord) await restoreRecord(scenarioRecord)
+      } finally {
+        releaseScenario?.()
+      }
     } catch (e) {
       Toast.error(e?.message || e || t('import_failed'))
     } finally {
@@ -649,6 +679,9 @@ function disable360() {
             <i18n-t keypath="import_overwrite_warning" tag="span">
               <strong class="color-red">{{ $t('complete_overflow') }}</strong>
             </i18n-t>
+            <p class="text-sm mt-2">
+              ZIP 中包含场景模块时，也会替换场景资料、进度和保留录音；旧备份不含该模块时保留当前场景记录。
+            </p>
 
             <div class="line my-3"></div>
             <SettingItem :title="$t('other')"> </SettingItem>
