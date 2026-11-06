@@ -9,6 +9,8 @@ import {
   cloneState,
   commitTask,
   dueKeys,
+  isIndependentAnswer,
+  isSpokenRating,
   localDay,
   sessionAttempts,
   startSession,
@@ -20,7 +22,7 @@ import type { Hint, Outcome, LearnerProfile, ScenarioState, ScenarioRecord } fro
 
 useHead({ title: '场景短课 · TypeWords 个人学习版' })
 const { state, ready, writable, saving, error, enabled, recordings, change, retry, takeover, restore, keepRecording } =
-  useScenario()
+  useScenario(flushDraft)
 const view = ref<'today' | 'practice' | 'profile' | 'progress' | 'backup'>('today')
 const busy = ref(false)
 const draft = ref('')
@@ -34,12 +36,25 @@ const includeMedia = ref(true)
 const session = computed(() => state.value.session)
 const task = computed(() => session.value?.queue[session.value.index])
 const lessons = computed(() => starterLessons(state.value.profile))
-const due = computed(() => dueKeys(state.value))
+const clock = ref(Date.now())
+const due = computed(() => dueKeys(state.value, new Date(clock.value)))
+let dueTimer: ReturnType<typeof setTimeout>
+function refreshDue() {
+  clearTimeout(dueTimer)
+  clock.value = Date.now()
+  const next = Math.min(
+    ...Object.values(state.value.cards)
+      .map(card => +new Date(card.card.due))
+      .filter(time => time > clock.value)
+  )
+  if (Number.isFinite(next)) dueTimer = setTimeout(refreshDue, Math.min(next - clock.value, 2_147_483_647))
+}
+watch(() => state.value.cards, refreshDue)
 const recommended = computed(
   () => lessons.value.find(l => !state.value.completedLessons.includes(l.id)) ?? lessons.value[0]
 )
 const currentAttempts = computed(() => (session.value ? sessionAttempts(state.value, session.value) : []))
-const spoken = computed(() => currentAttempts.value.filter(a => a.source === 'self'))
+const spoken = computed(() => currentAttempts.value.filter(isSpokenRating))
 const listened = computed(() => currentAttempts.value.filter(a => a.source === 'rule' && a.scheduled))
 const choices = computed(() => {
   const options = [...(task.value?.expression.choices ?? [])]
@@ -52,8 +67,8 @@ const recentDays = computed(() => {
     const day = localDay(new Date(a.createdAt))
     const item = days.get(day) ?? { count: 0, self: 0, independent: 0 }
     item.count++
-    if (a.source === 'self') item.self++
-    if (a.hint === 0 && ['good', 'easy'].includes(a.outcome) && a.scheduled) item.independent++
+    if (isSpokenRating(a)) item.self++
+    if (isIndependentAnswer(a)) item.independent++
     days.set(day, item)
   }
   return [...days.entries()].sort(([a], [b]) => b.localeCompare(a)).slice(0, 7)
@@ -80,7 +95,17 @@ function resetStep() {
   checked.value = false
   activityAt = 0
 }
-watch(() => task.value?.id, resetStep)
+watch([() => task.value?.id, writable], resetStep, { flush: 'sync' })
+watch(
+  () => session.value?.draft,
+  () => {
+    if (!writable.value) resetStep()
+  }
+)
+const listenChoice = computed(() => (task.value?.kind === 'listen' ? (session.value?.draft ?? '') : ''))
+const listenFeedback = computed(() =>
+  listenChoice.value === task.value?.expression.chinese ? '听懂了这句的意思。' : '这次没有选对。看看中文，再听一遍。'
+)
 watch(view, () => {
   activityAt = 0
   if (view.value === 'profile') profileDraft.value = { ...state.value.profile }
@@ -114,6 +139,13 @@ function saveDraft() {
       s.draft = value
     })
   }, 200)
+}
+function flushDraft() {
+  if (draftTimer) clearTimeout(draftTimer)
+  if (task.value?.kind === 'type' && !composing.value && draft.value !== session.value?.draft)
+    return editSession(s => {
+      s.draft = draft.value
+    })
 }
 function onDraftInput() {
   checked.value = false
@@ -174,21 +206,15 @@ async function checkTyping() {
   }
 }
 async function answerListen(choice: string) {
-  if (!enabled.value || busy.value || checked.value || !session.value?.heard || session.value.audioFailed) return
-  draft.value = choice
+  if (!enabled.value || busy.value || listenChoice.value || !session.value?.heard || session.value.audioFailed) return
   await editSession(s => {
     s.draft = choice
   })
-  checked.value = true
-  feedback.value =
-    choice === task.value?.expression.chinese ? '听懂了这句的意思。' : '这次没有选对。看看中文，再听一遍。'
 }
 async function pause() {
   if (draftTimer) clearTimeout(draftTimer)
   flushActivity()
-  await editSession(s => {
-    s.draft = draft.value
-  })
+  await flushDraft()
   view.value = 'today'
 }
 async function nextLesson() {
@@ -274,6 +300,7 @@ async function confirmImport() {
   }
 }
 function hidden() {
+  if (!document.hidden) refreshDue()
   activityAt = 0
   flushActivity()
 }
@@ -282,6 +309,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', hidden)
 })
 onUnmounted(() => {
+  clearTimeout(dueTimer)
   if (draftTimer) clearTimeout(draftTimer)
   if (interval) clearInterval(interval)
   document.removeEventListener('visibilitychange', hidden)
@@ -369,7 +397,7 @@ onUnmounted(() => {
                 state.profile.dailyMinutes === 10
                   ? '新课精简到 2 个表达'
                   : state.profile.dailyMinutes === 25
-                    ? '完成后可再选一课或复习，不增加新词负担'
+                    ? '学完后再回忆一句，并换个场景开口'
                     : '2–3 个短表达，按自己的节奏练习'
               }}
             </p>
@@ -420,9 +448,13 @@ onUnmounted(() => {
           <p class="small">
             第 {{ session.index + 1 }} / {{ session.queue.length }} 步 ·
             {{
-              task.review
-                ? '到期复习'
-                : { learn: '认识这句话', listen: '听懂意思', type: '试着写一句', speak: '开口回答' }[task.kind]
+              task.extension === 'recall'
+                ? '回忆练习'
+                : task.extension === 'variant'
+                  ? '换个场景开口'
+                  : task.review
+                    ? '到期复习'
+                    : { learn: '认识这句话', listen: '听懂意思', type: '试着写一句', speak: '开口回答' }[task.kind]
             }}
           </p>
           <progress :value="session.index" :max="session.queue.length" aria-label="本次练习进度" />
@@ -456,12 +488,14 @@ onUnmounted(() => {
               :saved="recordings"
               @heard="
                 editSession(s => {
+                  if (listenChoice) return
                   s.heard = true
                   s.audioFailed = false
                 })
               "
               @failed="
                 editSession(s => {
+                  if (listenChoice) return
                   s.audioFailed = true
                 })
               "
@@ -470,26 +504,33 @@ onUnmounted(() => {
               <button
                 v-for="choice in choices"
                 :key="choice"
-                :disabled="!enabled || busy || checked || !session.heard || session.audioFailed || session.hint === 2"
-                :class="{ chosen: draft === choice }"
+                :disabled="
+                  !enabled || busy || !!listenChoice || !session.heard || session.audioFailed || session.hint === 2
+                "
+                :class="{ chosen: listenChoice === choice }"
                 @click="answerListen(choice)"
               >
                 {{ choice }}
               </button>
             </div>
-            <button class="text-button" :disabled="!enabled || busy" @click="setHint(2)">
+            <button class="text-button" :disabled="!enabled || busy || !!listenChoice" @click="setHint(2)">
               看文字继续（不计听力成绩）
             </button>
             <div v-if="session.hint === 2" class="hint-box">
               <strong>{{ task.expression.english }}</strong>
               <p>{{ task.expression.chinese }}</p>
             </div>
-            <p v-if="feedback" role="status" class="feedback">{{ feedback }}</p>
+            <p v-if="listenChoice" role="status" class="feedback">{{ listenFeedback }}</p>
             <button
-              v-if="checked || session.hint === 2"
+              v-if="listenChoice || session.hint === 2"
               class="primary"
               :disabled="!enabled || busy"
-              @click="submit(session.hint === 2 ? 'skip' : draft === task.expression.chinese ? 'good' : 'again')"
+              @click="
+                submit(
+                  session.hint === 2 ? 'skip' : listenChoice === task.expression.chinese ? 'good' : 'again',
+                  listenChoice
+                )
+              "
             >
               继续
             </button>
@@ -575,7 +616,9 @@ onUnmounted(() => {
               <p v-if="session.hint > 0" class="small">本次已看过英文提示，仍按提示后完成记录，不计独立回答。</p>
             </div>
           </template>
-          <button class="text-button skip" :disabled="!enabled || busy" @click="submit('skip')">这一步先跳过</button>
+          <button class="text-button skip" :disabled="!enabled || busy || !!listenChoice" @click="submit('skip')">
+            这一步先跳过
+          </button>
           <p v-if="session.activeMs >= state.profile.dailyMinutes * 60000" class="notice">
             已经练了一会儿，可以暂停，今天先到这里。进度会保留。
           </p>
@@ -594,7 +637,7 @@ onUnmounted(() => {
             </div>
             <div>
               <dt>无英文提示完成（自评）</dt>
-              <dd>{{ spoken.filter(a => a.hint === 0 && ['good', 'easy'].includes(a.outcome)).length }}</dd>
+              <dd>{{ spoken.filter(isIndependentAnswer).length }}</dd>
             </div>
           </dl>
           <ul class="review-list">
@@ -652,7 +695,7 @@ onUnmounted(() => {
           <li v-for="[day, stats] in recentDays" :key="day">
             <strong>{{ day }}</strong
             ><span
-              >{{ stats.count }} 次练习 · {{ stats.self }} 次口头自评 · {{ stats.independent }} 次无英文提示完成 ·
+              >{{ stats.count }} 次练习 · {{ stats.self }} 次口头自评 · {{ stats.independent }} 次无英文提示口头回答 ·
               有效活动 {{ Math.round((state.activityDays[day] ?? 0) / 1000) }} 秒</span
             >
           </li>

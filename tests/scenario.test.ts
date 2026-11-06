@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Rating } from 'ts-fsrs'
@@ -7,11 +8,13 @@ import {
   dueKeys,
   freshState,
   gradeOutcome,
+  isIndependentAnswer,
+  isSpokenRating,
   startSession,
   suggestedHint,
 } from '../app/core/scenario/engine.ts'
 import { starterLessons } from '../app/core/scenario/courses.ts'
-import { parseScenarioZip, validateState } from '../app/core/scenario/persistence.ts'
+import { parseScenarioZip, readZipEntry, validateState } from '../app/core/scenario/persistence.ts'
 import type { ScenarioState } from '../app/core/types/scenario.ts'
 
 const now = new Date('2026-11-05T04:00:00Z')
@@ -158,25 +161,70 @@ test('corrupt and future backups are rejected before storage changes', async () 
   state.cards[key].card.due = 'bad date' as unknown as Date
   assert.throws(() => validateState(state))
   assert.equal(await parseScenarioZip({ file: () => null }), null)
-  const parse = (value: unknown) =>
-    parseScenarioZip({
-      file: name => (name === 'scenario/data.json' ? { async: async () => JSON.stringify(value) } : null),
-    })
+  const parse = async (value: unknown, manifest?: unknown) => {
+    const zip = new JSZip()
+    zip.file('scenario/data.json', JSON.stringify(value))
+    if (manifest) zip.file('manifest.json', JSON.stringify(manifest))
+    return parseScenarioZip(await JSZip.loadAsync(await zip.generateAsync({ type: 'uint8array' })))
+  }
   await assert.rejects(parse({ version: 2, state: freshState(), media: [] }))
   await assert.rejects(parse({ version: 1, state: freshState(), media: [{ id: '../escape' }] }))
   const restored = await parse({ version: 1, state: finishLesson(), media: [] })
   assert.equal(restored!.state.completedLessons[0], 'introduce')
-  await assert.rejects(
-    parseScenarioZip({
-      file: name => ({
-        async: async () =>
-          JSON.stringify(
-            name === 'manifest.json'
-              ? { format: 'typewords-personal', version: 2 }
-              : { version: 1, state: freshState(), media: [] }
-          ),
-      }),
-    }),
-    /版本/
+  await assert.rejects(parse({}, { format: 'typewords-personal', version: 2 }), /版本/)
+})
+
+const JSZip = createRequire(import.meta.url)('../public/libs/jszip.min.js')
+test('enforces the decompressed byte budget even with a false directory size', async () => {
+  const zip = new JSZip()
+  zip.file('large', 'x'.repeat(2 * 1024 * 1024))
+  const data = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+  const entry = (await JSZip.loadAsync(data)).file('large')
+  await assert.rejects(readZipEntry(entry, 1024), /超过大小/)
+  entry._data.uncompressedSize = 1
+  await assert.rejects(readZipEntry(entry, 1024), /超过大小/)
+})
+
+test('cards becoming due after the first session are available through both normal entrances', () => {
+  const finished = finishLesson()
+  const later = new Date(now.getTime() + 5 * 3600000)
+  assert.equal(dueKeys(finished, later).length, 6)
+  for (const options of [{}, { reviewOnly: true }]) {
+    const next = startSession(finished, 'again', options, later)
+    assert.equal(next.session!.id, 'again')
+    assert.equal(next.session!.queue.length, 6)
+    assert.ok(next.session!.queue.every(task => task.review))
+  }
+})
+
+test('skipping speaking and passing listening do not count as independent speaking', () => {
+  const attempts = finishLesson().attempts.map(a => (a.inputMode === 'speak' ? { ...a, outcome: 'skip' as const } : a))
+  assert.equal(attempts.filter(isSpokenRating).length, 0)
+  assert.equal(attempts.filter(isIndependentAnswer).length, 0)
+  const spoken = { ...attempts.find(a => a.inputMode === 'speak')!, outcome: 'good' as const }
+  assert.ok(isSpokenRating(spoken))
+  assert.ok(!isIndependentAnswer(spoken))
+  assert.ok(isIndependentAnswer({ ...spoken, hint: 0 }))
+})
+
+test('the 25-minute plan adds recall and a new situation without moving non-due cards', () => {
+  const state = finishLesson()
+  state.profile.dailyMinutes = 25
+  const next = startSession(state, 'long', { lessonId: 'work' }, now)
+  const extra = next.session!.queue.slice(-2)
+  assert.deepEqual(
+    extra.map(t => t.extension),
+    ['recall', 'variant']
+  )
+  assert.ok(state.cards[extra[0].expression.id + ':produce'])
+  const original = starterLessons().find(l => l.id === 'work')!.expressions[0]
+  assert.notEqual(extra[1].expression.questionChinese, original.questionChinese)
+  assert.equal(extra[1].expression.english, original.english)
+  assert.deepEqual(validateState(JSON.parse(JSON.stringify(next))).session!.queue, next.session!.queue)
+  const finished = finishLesson('work', next, 'long')
+  assert.ok(finished.attempts.filter(a => extra.some(t => t.id === a.taskId)).every(a => !a.scheduled))
+  assert.deepEqual(
+    finished.cards[extra[0].expression.id + ':produce'],
+    state.cards[extra[0].expression.id + ':produce']
   )
 })

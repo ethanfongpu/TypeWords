@@ -241,3 +241,13 @@ export function starterLessons(profile: LearnerProfile = defaultProfile): Lesson
     },
   ]
 }
+
+// Reuse the recorded question and known answer in a different conversational setting.
+export const lessonVariant: Record<string, { expressionId: string; prompt: string }> = {
+  introduce: { expressionId: 'name', prompt: '你第一次参加英语角，接待员要在名牌上写下你的名字。请回答他。' },
+  work: { expressionId: 'sales', prompt: '在展会茶歇时，一位新朋友问起你的工作。请用学过的样例回答。' },
+  product: { expressionId: 'this', prompt: '访客指着展台上的音箱，想知道这是什么。请向他介绍。' },
+  audience: { expressionId: 'kids', prompt: '顾客正在为孩子选礼物，想知道样品适合谁。请回答。' },
+  feature: { expressionId: 'music', prompt: '朋友第一次使用这台样例音箱，请告诉他可以用它做什么。' },
+  help: { expressionId: 'check', prompt: '电话里的顾客问价格，而你手边没有价目表。你怎么回应？' },
+}

@@ -3,7 +3,7 @@ import { freshState } from '../scenario/engine.ts'
 import { readRecord, writeState, SCENARIO_LOCK, restoreRecord, saveRecording } from '../scenario/persistence.ts'
 import type { SavedRecording, ScenarioRecord, ScenarioState } from '../types/scenario.ts'
 
-export function useScenario() {
+export function useScenario(beforeYield: () => void) {
   const state = shallowRef<ScenarioState>(freshState())
   const ready = ref(false)
   const writable = ref(false)
@@ -15,19 +15,24 @@ export function useScenario() {
   let writes: Promise<void> = Promise.resolve()
   let disposed = false
   let pending = 0
+  let acquiring = false
+  let loadVersion = 0
   async function load() {
+    const version = ++loadVersion
     const record = await readRecord()
+    if (version !== loadVersion || disposed) return
     state.value = record.state
     recordings.value = record.media
   }
   async function acquire() {
-    if (writable.value || disposed) return
+    if (writable.value || disposed || acquiring) return
     if (!navigator.locks) {
       error.value = '当前浏览器不支持安全的多标签保存，请使用新版 Chrome 或 Edge。'
       ready.value = true
       return
     }
     // Keep the lock alive for the page lifetime. No timeout-based leases that background tabs could accidentally outlive.
+    acquiring = true
     void navigator.locks.request(SCENARIO_LOCK, { ifAvailable: true }, async lock => {
       if (disposed) return
       try {
@@ -35,6 +40,7 @@ export function useScenario() {
         if (disposed) return
         error.value = ''
         ready.value = true
+        acquiring = false
         if (!lock) return
         writable.value = true
         await new Promise<void>(resolve => {
@@ -44,12 +50,14 @@ export function useScenario() {
         error.value = `无法读取学习记录：${(e as Error).message}。当前数据未被覆盖。`
         ready.value = true
       } finally {
+        acquiring = false
         writable.value = false
         release = null
       }
     })
   }
   function stopWriting() {
+    if (writable.value) beforeYield()
     writable.value = false
     void writes.finally(() => release?.())
   }
@@ -111,7 +119,7 @@ export function useScenario() {
     channel = new BroadcastChannel(SCENARIO_LOCK)
     channel.onmessage = event => {
       if (event.data === 'takeover' && writable.value) stopWriting()
-      if (event.data === 'saved' && !writable.value) void load().catch(() => {})
+      if (event.data === 'saved' && !writable.value && !acquiring) void load().catch(() => {})
     }
     void acquire()
   })

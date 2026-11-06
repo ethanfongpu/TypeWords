@@ -36,6 +36,7 @@ export interface Task {
   expression: Expression
   skill: Skill
   review: boolean
+  extension?: 'recall' | 'variant'
   initialHint: Hint
 }
 export interface Attempt {

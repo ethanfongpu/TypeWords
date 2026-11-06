@@ -120,6 +120,7 @@ export function validateState(raw: unknown): ScenarioState {
         validExpression(task.expression) &&
           ['listen', 'produce'].includes(task.skill) &&
           typeof task.review === 'boolean' &&
+          (task.extension === undefined || (task.kind === 'speak' && ['recall', 'variant'].includes(task.extension))) &&
           [0, 1, 2].includes(task.initialHint)
       )
       taskIds.add(task.id)
@@ -215,19 +216,48 @@ export async function appendScenarioZip(zip: any, includeMedia = true) {
   )
   if (includeMedia) for (const media of record.media) zip.file(`scenario/media/${media.id}`, media.blob)
 }
+// Check the ZIP directory first, then enforce the same limit on the actual output.
+// A forged directory size must not turn a small download into an unbounded allocation.
+export async function readZipEntry(entry: any, maxBytes: number): Promise<Blob> {
+  const message = '备份内容解压后超过大小限制。'
+  if (entry._data?.uncompressedSize > maxBytes) throw new Error(message)
+  return new Promise((resolve, reject) => {
+    const stream = entry.internalStream('uint8array')
+    const chunks: BlobPart[] = []
+    let total = 0
+    let stopped = false
+    stream.on('data', (chunk: Uint8Array<ArrayBuffer>) => {
+      if (stopped) return
+      total += chunk.byteLength
+      if (total > maxBytes) {
+        stopped = true
+        stream.pause()
+        chunks.length = 0
+        reject(new Error(message))
+        return
+      }
+      chunks.push(chunk)
+    })
+    stream.on('error', reject)
+    stream.on('end', () => {
+      if (!stopped) resolve(new Blob(chunks))
+    })
+    stream.resume()
+  })
+}
 export async function parseScenarioZip(zip: any): Promise<ScenarioRecord | null> {
   const entry = zip.file('scenario/data.json')
-  if (!entry) return null // Old backups leave scenario data untouched.
   const manifestFile = zip.file('manifest.json')
   if (manifestFile) {
-    const manifest = JSON.parse(await manifestFile.async('string'))
+    const manifest = JSON.parse(await (await readZipEntry(manifestFile, 64 * 1024)).text())
     assert(
       object(manifest) && manifest.format === 'typewords-personal' && manifest.version === 1,
       '不支持这个场景备份版本。'
     )
+    if (manifest.modules?.includes('scenario')) assert(entry)
   }
-  const text = await entry.async('string')
-  assert(text.length < 25 * 1024 * 1024, '场景数据文件过大。')
+  if (!entry) return null // Legacy backups leave scenario data untouched.
+  const text = await (await readZipEntry(entry, 25 * 1024 * 1024)).text()
   const data = JSON.parse(text)
   assert(object(data) && data.version === 1, '不支持这个场景备份版本。')
   const state = validateState(data.state)
@@ -252,15 +282,15 @@ export async function parseScenarioZip(zip: any): Promise<ScenarioRecord | null>
     )
     const file = zip.file(meta.path)
     assert(file)
-    const bytes = await file.async('uint8array')
-    assert(bytes.byteLength === meta.size)
+    const blob = await readZipEntry(file, meta.size)
+    assert(blob.size === meta.size)
     media.push({
       id: meta.id,
       sessionId: meta.sessionId,
       taskId: meta.taskId,
       mimeType: meta.mimeType,
       createdAt: meta.createdAt,
-      blob: new Blob([bytes], { type: meta.mimeType }),
+      blob: blob.slice(0, blob.size, meta.mimeType),
     })
     ids.add(meta.id)
   }

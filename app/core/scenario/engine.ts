@@ -1,5 +1,5 @@
 import { createEmptyCard, fsrs, Rating, type Grade } from 'ts-fsrs'
-import { defaultProfile, starterLessons } from './courses.ts'
+import { defaultProfile, lessonVariant, starterLessons } from './courses.ts'
 import type { Attempt, Expression, Hint, Outcome, ScenarioState, Session, Skill, Task } from '../types/scenario.ts'
 
 export const CONTENT_VERSION = 1
@@ -67,9 +67,11 @@ export function startSession(
   const next = cloneState(state)
   const day = localDay(now)
   const due = dueKeys(next, now)
-  const daily = next.dailyQueues[day] ?? due.slice(0, 6)
+  // Keep the order of outstanding cards and fill empty places with newly due cards.
+  const remaining = (next.dailyQueues[day] ?? []).filter(key => due.includes(key))
+  const daily = [...remaining, ...due.filter(key => !remaining.includes(key))].slice(0, 6)
   next.dailyQueues[day] = daily
-  const review = (options.quick ? due.slice(0, 2) : daily.filter(key => due.includes(key))).map((key): Task => {
+  const review = (options.quick ? daily.slice(0, 2) : daily).map((key): Task => {
     const card = next.cards[key]
     return {
       id: `${id}:review:${key}`,
@@ -101,6 +103,34 @@ export function startSession(
           initialHint: kind === 'learn' ? 2 : kind === 'listen' ? 0 : 1,
         })
       }
+    }
+    if (next.profile.dailyMinutes === 25) {
+      const prior = Object.values(next.cards)
+        .filter(card => card.skill === 'produce' && !expressions.some(e => e.id === card.expressionId))
+        .sort((a, b) => +new Date(a.card.due) - +new Date(b.card.due))[0]
+      const recall = prior?.expression ?? expressions[0]
+      const variant = lessonVariant[lesson.id]
+      const target = expressions.find(e => e.id === variant.expressionId)!
+      queue.push(
+        {
+          id: `${id}:recall`,
+          kind: 'speak',
+          expression: cloneState(recall),
+          skill: 'produce',
+          review: false,
+          extension: 'recall',
+          initialHint: 0,
+        },
+        {
+          id: `${id}:variant`,
+          kind: 'speak',
+          expression: { ...target, questionChinese: variant.prompt },
+          skill: 'produce',
+          review: false,
+          extension: 'variant',
+          initialHint: 0,
+        }
+      )
     }
   }
   if (!queue.length) return next
@@ -164,7 +194,12 @@ export function commitTask(
     createdAt: now.toISOString(),
     scheduled: false,
   }
-  if (rating !== null && !alreadyScheduled && !(task.kind === 'listen' && (!session.heard || session.audioFailed))) {
+  if (
+    !task.extension &&
+    rating !== null &&
+    !alreadyScheduled &&
+    !(task.kind === 'listen' && (!session.heard || session.audioFailed))
+  ) {
     const old = next.cards[key]
     next.cards[key] = {
       expressionId: task.expression.id,
@@ -186,7 +221,7 @@ export function commitTask(
   if (session.index >= session.queue.length) {
     session.finishedAt = now.toISOString()
     if (session.lessonId && !next.completedLessons.includes(session.lessonId)) {
-      const produced = session.queue.filter(t => t.kind === 'speak' && !t.review)
+      const produced = session.queue.filter(t => t.kind === 'speak' && !t.review && !t.extension)
       if (produced.length && produced.every(t => next.attempts.some(a => a.taskId === t.id && a.outcome !== 'skip')))
         next.completedLessons.push(session.lessonId)
     }
@@ -197,4 +232,11 @@ export function commitTask(
 // A restored session contains snapshots, so edits to profile or course copy never rewrite past attempts.
 export function sessionAttempts(state: ScenarioState, session: Session) {
   return state.attempts.filter(a => a.sessionId === session.id)
+}
+
+export function isSpokenRating(a: Attempt) {
+  return a.inputMode === 'speak' && a.source === 'self' && a.outcome !== 'skip'
+}
+export function isIndependentAnswer(a: Attempt) {
+  return isSpokenRating(a) && a.hint === 0 && (a.outcome === 'good' || a.outcome === 'easy')
 }

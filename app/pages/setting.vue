@@ -15,7 +15,7 @@ import {
   LOCAL_FILE_KEY,
   Origin,
 } from '@/core/config/env'
-import { get, set } from 'idb-keyval'
+import { get } from 'idb-keyval'
 import { useRuntimeStore } from '@/core/stores/runtime'
 import { useExport } from '@/core/hooks/export'
 import Log from '@/components/setting/Log.vue'
@@ -30,7 +30,7 @@ import { useDataSyncPersistence } from '@/core/composables/useDataSyncPersistenc
 import SettingItem from '@/components/setting/SettingItem.vue'
 import { Supabase } from '@/core/utils/supabase.ts'
 import BackupGateDialog from '@/components/dialog/BackupGateDialog.vue'
-import { parseScenarioZip, restoreRecord, SCENARIO_LOCK } from '@/core/scenario/persistence'
+import { parseScenarioZip, readZipEntry, SCENARIO_KEY, SCENARIO_LOCK } from '@/core/scenario/persistence'
 
 import { createClient } from '@supabase/supabase-js'
 import { useRoute } from 'vue-router'
@@ -214,22 +214,9 @@ function upgradeImportedPracticeWordCache(data: BackupData['val']) {
   data[PRACTICE_WORD_CACHE.key] = checkAndUpgradePracticeWordCache(data[PRACTICE_WORD_CACHE.key], data.setting.val)
 }
 
-async function importJson(str: string) {
-  importLoading = true
-  let obj: BackupData = {
-    version: -1,
-    val: {
-      setting: {},
-      dict: {},
-      [PRACTICE_WORD_CACHE.key]: null,
-      [PRACTICE_ARTICLE_CACHE.key]: null,
-      // @deprecated 大版本5废弃
-      [APP_VERSION.key]: null,
-    },
-  }
+async function importJson(str: string, extraEntries: [string, unknown][] = []) {
+  const obj: BackupData = JSON.parse(str)
   try {
-    debugger
-    obj = JSON.parse(str)
     let data = obj.val
     data.dict.val = await checkAndUpgradeSaveDict(data.dict)
     data.setting.val = await checkAndUpgradeSaveSetting(data.setting)
@@ -243,43 +230,31 @@ async function importJson(str: string) {
     //需在调同步方法前面，同步方法可能报错
     let hasRemote = Supabase.check()
     runtimeStore.globalLoading = true
-    const pushOk = await dataSyncPersistence.forcePushLocalDataToRemote(data)
-    runtimeStore.globalLoading = false
-    if (pushOk) {
-      Toast.success(t('import_success_overwrite_remote'))
-    } else {
-      Toast.success(hasRemote ? t('import_success_push_failed') : t('import_success'))
-    }
+    const pushOk = await dataSyncPersistence.forcePushLocalDataToRemote(data, undefined, extraEntries)
     runtimeStore.isNew = APP_VERSION.version > Number(data.setting?.val?.webAppVersion ?? APP_VERSION.version)
     data.setting.val.load = true
     settingStore.setState(data.setting.val)
     data.dict.val.load = true
     store.setState(data.dict.val)
     showBackupGate = false
-    return true
-  } catch (err) {
-    Toast.error(t('import_failed'))
-    return false
+    if (pushOk) {
+      Toast.success(t('import_success_overwrite_remote'))
+    } else {
+      Toast.success(hasRemote ? t('import_success_push_failed') : t('import_success'))
+    }
   } finally {
-    importLoading = false
+    runtimeStore.globalLoading = false
   }
 }
 
 async function importData(e) {
   importLoading = true
-  let file = e.target.files[0]
-  if (!file) return (importLoading = false)
-  if (file.name.endsWith('.json')) {
-    let reader = new FileReader()
-    reader.onload = function (v) {
-      let str: any = v.target.result
-      if (str) {
-        importJson(str)
-      }
-    }
-    reader.readAsText(file)
-  } else if (file.name.endsWith('.zip')) {
-    try {
+  const file = e.target.files[0] as File | undefined
+  try {
+    if (!file) return
+    if (file.name.endsWith('.json')) {
+      await importJson(await file.text())
+    } else if (file.name.endsWith('.zip')) {
       const JSZip = await loadJsLib('JSZip', LIB_JS_URL.JSZIP)
       const zip = await JSZip.loadAsync(file)
 
@@ -290,57 +265,36 @@ async function importData(e) {
 
       // Validate the optional module before touching any existing data. Restore it under the same writer lock as the lesson page.
       const scenarioRecord = await parseScenarioZip(zip)
-      let releaseScenario: (() => void) | undefined
+      const entries: [string, unknown][] = []
+      if (scenarioRecord) entries.push([SCENARIO_KEY, scenarioRecord])
+      const records: { id: string; file: Blob }[] = []
+      let mediaBudget = 512 * 1024 * 1024
+      for (const filename of Object.keys(zip.files)) {
+        if (filename.startsWith('mp3/') && filename.endsWith('.mp3')) {
+          const blob = await readZipEntry(zip.file(filename), mediaBudget)
+          mediaBudget -= blob.size
+          records.push({ id: filename.slice(4, -4), file: blob })
+        }
+      }
+      entries.push([LOCAL_FILE_KEY, records])
+      const str = await (await readZipEntry(dataFile, 256 * 1024 * 1024)).text()
       if (scenarioRecord) {
         if (!navigator.locks) throw new Error('请使用新版 Chrome 或 Edge 恢复场景数据。')
-        const acquired = await new Promise<boolean>((resolve, reject) => {
-          void navigator.locks
-            .request(SCENARIO_LOCK, { ifAvailable: true }, async lock => {
-              if (!lock) {
-                resolve(false)
-                return
-              }
-              await new Promise<void>(release => {
-                releaseScenario = release
-                resolve(true)
-              })
-            })
-            .catch(reject)
+        await navigator.locks.request(SCENARIO_LOCK, { ifAvailable: true }, async lock => {
+          if (!lock) throw new Error('请先关闭场景学习标签，再恢复完整备份。')
+          await importJson(str, entries)
         })
-        if (!acquired) throw new Error('请先关闭场景学习标签，再恢复完整备份。')
+      } else {
+        await importJson(str, entries)
       }
-
-      try {
-        const mp3Folder = zip.folder('mp3')
-        if (mp3Folder) {
-          const records: { id: string; file: Blob }[] = []
-          for (const filename in zip.files) {
-            if (filename.startsWith('mp3/') && filename.endsWith('.mp3')) {
-              const entry = zip.file(filename)
-              if (!entry) continue
-              const blob = await entry.async('blob')
-              const id = filename.replace(/^mp3\//, '').replace(/\.mp3$/, '')
-              records.push({ id, file: blob })
-            }
-          }
-          await set(LOCAL_FILE_KEY, records)
-        }
-
-        const str = await dataFile.async('string')
-        if (!(await importJson(str))) throw new Error(t('import_failed'))
-        if (scenarioRecord) await restoreRecord(scenarioRecord)
-      } finally {
-        releaseScenario?.()
-      }
-    } catch (e) {
-      Toast.error(e?.message || e || t('import_failed'))
-    } finally {
-      importLoading = false
+    } else {
+      Toast.error(t('unsupported_file_type'))
     }
-  } else {
-    Toast.error(t('unsupported_file_type'))
+  } catch (e) {
+    Toast.error(e?.message || t('import_failed'))
+  } finally {
+    importLoading = false
   }
-  importLoading = false
 }
 
 let showBackupGate = $ref(false)

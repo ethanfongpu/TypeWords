@@ -31,7 +31,7 @@ import { type BaseState, getDefaultBaseState, getDefaultSettingState, useBaseSto
 import type { BackupData, SaveData, Snapshot } from '../types/types.ts'
 import { SyncDataType, CompareResult, DictType } from '../types/enum'
 import { Supabase } from '../utils/supabase'
-import { del, get, set } from 'idb-keyval'
+import { createStore, del, get, promisifyRequest, set } from 'idb-keyval'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { Toast } from '@/base'
 
@@ -56,6 +56,9 @@ type SaveLocalAndSyncOptions = {
   pushWhenLocalNewer?: boolean
   canSyncRemote?: boolean
 }
+
+// The same IndexedDB database and object store used by idb-keyval's default store.
+const backupStore = createStore('keyval-store', 'keyval')
 
 const DICT_SYNC_BLOCK_REASON = '检测到自定义文章里面有自定义音频，无法使用同步功能'
 
@@ -463,29 +466,54 @@ export function useDataSyncPersistence() {
     return rows?.[0] ?? null
   }
 
-  async function forcePushLocalDataToRemote(data: BackupData['val'], client?: SupabaseClient | null): Promise<boolean> {
+  async function forcePushLocalDataToRemote(
+    data: BackupData['val'],
+    client?: SupabaseClient | null,
+    extraEntries: [string, unknown][] = []
+  ): Promise<boolean> {
     let syncResult = true
     const updated_at = new Date().toISOString()
+    const rows: Array<{ type: SyncDataType; data: unknown; data_version: number; updated_at: string }> = [
+      { type: SyncDataType.dict, data: data.dict.val, data_version: SAVE_DICT_KEY.version, updated_at },
+      { type: SyncDataType.setting, data: data.setting.val, data_version: SAVE_SETTING_KEY.version, updated_at },
+      {
+        type: SyncDataType.practice_word,
+        //@ts-ignore
+        data: data?.[PRACTICE_WORD_CACHE.key]?.val ?? null,
+        data_version: PRACTICE_WORD_CACHE.version,
+        updated_at,
+      },
+      {
+        type: SyncDataType.practice_article,
+        //@ts-ignore
+        data: data?.[PRACTICE_ARTICLE_CACHE.key]?.val ?? null,
+        data_version: PRACTICE_ARTICLE_CACHE.version,
+        updated_at,
+      },
+    ]
+    const keys = {
+      [SyncDataType.dict]: SAVE_DICT_KEY.key,
+      [SyncDataType.setting]: SAVE_SETTING_KEY.key,
+      [SyncDataType.practice_word]: PRACTICE_WORD_CACHE.key,
+      [SyncDataType.practice_article]: PRACTICE_ARTICLE_CACHE.key,
+    }
+    const entries: [string, unknown][] = rows.map(row => [
+      keys[row.type],
+      JSON.stringify({ val: row.data, version: row.data_version, updated_at }),
+    ])
+    // Commit every local module before any remote upsert or success notification.
+    await backupStore('readwrite', store => {
+      const tx = store.transaction
+      try {
+        for (const [key, value] of [...entries, ...extraEntries]) store.put(value, key)
+      } catch (error) {
+        tx.abort()
+        throw error
+      }
+      return promisifyRequest(tx)
+    })
     const sb = getSyncClient(client)
     if (sb) {
-      const rows: Array<{ type: SyncDataType; data: unknown; data_version: number; updated_at: string }> = [
-        { type: SyncDataType.dict, data: data.dict.val, data_version: SAVE_DICT_KEY.version, updated_at },
-        { type: SyncDataType.setting, data: data.setting.val, data_version: SAVE_SETTING_KEY.version, updated_at },
-        {
-          type: SyncDataType.practice_word,
-          //@ts-ignore
-          data: data?.[PRACTICE_WORD_CACHE.key]?.val ?? null,
-          data_version: PRACTICE_WORD_CACHE.version,
-          updated_at,
-        },
-        {
-          type: SyncDataType.practice_article,
-          //@ts-ignore
-          data: data?.[PRACTICE_ARTICLE_CACHE.key]?.val ?? null,
-          data_version: PRACTICE_ARTICLE_CACHE.version,
-          updated_at,
-        },
-      ]
       try {
         const { error } = await (sb as any).from('typewords_data').upsert(rows, { onConflict: 'type' })
         if (error) {
@@ -499,12 +527,6 @@ export function useDataSyncPersistence() {
     } else {
       syncResult = false
     }
-    await persistLocalState(SyncDataType.dict, data.dict.val, updated_at)
-    await persistLocalState(SyncDataType.setting, data.setting.val, updated_at)
-    //@ts-ignore
-    await persistLocalState(SyncDataType.practice_word, data?.[PRACTICE_WORD_CACHE.key]?.val ?? null, updated_at)
-    //@ts-ignore
-    await persistLocalState(SyncDataType.practice_article, data?.[PRACTICE_ARTICLE_CACHE.key]?.val ?? null, updated_at)
     return syncResult
   }
 
