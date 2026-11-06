@@ -74,12 +74,29 @@ Designed to meet most users' vocabulary learning needs. Community contributions 
 
 ## Running the Project
 
+### Personal Scenario Lessons in This Fork
+
+The `feat/personal-scenarios` branch adds a beginner learning flow at `/scenarios`, accessible from the home page. See the [Chinese feature and fix notes](docs/README.zh-CN.md) for details.
+
+- Six lessons cover introductions, work, products, audiences, uses, and asking for clarification, with Chinese explanations, listening choices, typing, layered hints, and spoken self-assessment.
+- Choose 10, 15, or 25 minutes. The longer plan adds a recall task and a different conversational setting. A quick option reviews two due cards.
+- Use 27 bundled English audio samples, browser speech for personal names, and optional recording playback and retention.
+- Listening and speaking have separate FSRS cards and progress statistics. Due review controls update automatically as time passes.
+- Resume saved steps, drafts, hints, and listening choices. Explicit tab takeover restores the latest saved answer.
+- Export scenario records with optional recordings, or include them in the existing full ZIP backup. Full local restores commit all modules together and roll back on write failure. Decompression enforces output limits.
+
+Scenario data is stored in the current browser. Export a backup before switching devices or clearing browser data. Use recent Chrome or Edge for Web Locks support. Speaking results use self-assessment.
+
+Fix commit `9c85e8c` passed 16 automated tests, a production build, and Chrome regression checks for takeover, listening recovery, due reviews, the longer lesson flow, and failed-restore rollback and retry. The full application type check still reports 66 errors.
+
+Run `pnpm test` with Node.js 24, `pnpm build` to build, and `pnpm preview` to preview.
+
 #### Note: This project can run standalone with data saved locally. Manual backup is required when switching devices; this does not affect normal usage.
 
 This project is built with `Nuxt` and requires a Node.js environment.
 
 1. Install NodeJS, refer to the [official documentation](https://nodejs.org/en/download)
-2. The project is large. It's recommended to use `git clone --depth 1 https://github.com/zyronon/TypeWords.git` to clone only the latest commit. GitHub's Download ZIP feature will not work properly.
+2. To get this fork's personal learning version, use `git clone --depth 1 --branch feat/personal-scenarios https://github.com/ethanfongpu/TypeWords.git`.
 3. In the project root directory, open a terminal and run `pnpm install` to download dependencies.
 4. Run `pnpm run dev` to start the project. The default address is [`http://localhost:5567`](http://localhost:5567)
 5. Open [`http://localhost:5567`](http://localhost:5567) in your browser to access the project.
