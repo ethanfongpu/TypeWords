@@ -27,9 +27,9 @@ function finishLesson(lessonId = 'introduce', initial = freshState(), id = 'sess
   }
   return state
 }
-test('six complete original lessons have valid answers, choices, and no unresolved placeholders', () => {
+test('eight complete original lessons have valid answers, choices, and no unresolved placeholders', () => {
   const lessons = starterLessons()
-  assert.equal(lessons.length, 6)
+  assert.equal(lessons.length, 8)
   const ids = lessons.flatMap(l => l.expressions.map(e => e.id))
   assert.equal(new Set(ids).size, ids.length)
   for (const lesson of lessons)
@@ -151,7 +151,7 @@ test('every lesson can finish and pass backup schema validation', () => {
     state = finishLesson(lesson.id, state, lesson.id)
     assert.doesNotThrow(() => validateState(JSON.parse(JSON.stringify(state))))
   }
-  assert.equal(state.completedLessons.length, 6)
+  assert.equal(state.completedLessons.length, 8)
 })
 test('corrupt and future backups are rejected before storage changes', async () => {
   assert.throws(() => validateState({ ...freshState(), version: 2 }), /版本/)
@@ -227,4 +227,21 @@ test('the 25-minute plan adds recall and a new situation without moving non-due 
     finished.cards[extra[0].expression.id + ':produce'],
     state.cards[extra[0].expression.id + ':produce']
   )
+})
+
+test('personal expressions stay separate from examples and survive session and backup recovery', () => {
+  const state = freshState()
+  state.profile.role = '我修手机。'
+  state.profile.answers = { role: 'I repair phones.' }
+  state.profile.dailyMinutes = 25
+  const started = startSession(state, 'p', { lessonId: 'work' }, now)
+  const tasks = started.session!.queue.filter(t => t.expression.id === 'personal-sales')
+  assert.ok(tasks.some(t => t.extension === 'variant'))
+  assert.deepEqual(tasks[0].expression.accepted, ['I repair phones.'])
+  assert.equal(tasks[0].expression.choices[0], '我修手机。')
+  assert.equal(tasks[0].expression.sample, false)
+  const complete = finishLesson('work', started, 'p')
+  assert.ok(validateState(JSON.parse(JSON.stringify(complete))).cards['personal-sales:produce'])
+  delete state.profile.answers
+  assert.equal(starterLessons(state.profile)[1].expressions[0].id, 'sales')
 })

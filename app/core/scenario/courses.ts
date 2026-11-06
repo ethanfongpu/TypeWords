@@ -10,6 +10,13 @@ export const defaultProfile: LearnerProfile = {
   dailyMinutes: 15,
 }
 
+export const personalFields = {
+  sales: { field: 'role', label: '工作', example: 'I repair phones.' },
+  this: { field: 'product', label: '产品', example: 'This is a desk lamp.' },
+  kids: { field: 'audience', label: '适用人群', example: "It's for students." },
+  music: { field: 'action', label: '用途', example: 'You can record music.' },
+} as const
+
 // Original beginner course text, reviewed as complete sentences, not arbitrary slot concatenation.
 export function starterLessons(profile: LearnerProfile = defaultProfile): Lesson[] {
   const name = profile.name.trim() || 'Alex'
@@ -36,7 +43,7 @@ export function starterLessons(profile: LearnerProfile = defaultProfile): Lesson
     accepted: [english, ...accepted],
     sample,
   })
-  return [
+  const lessons: Lesson[] = [
     {
       id: 'introduce',
       title: '你好，我叫……',
@@ -239,11 +246,89 @@ export function starterLessons(profile: LearnerProfile = defaultProfile): Lesson
         ),
       ],
     },
+    {
+      id: 'needs',
+      title: '询问对方的需求',
+      goal: '弄清对方想要什么、打算怎么用',
+      expressions: [
+        make(
+          'need',
+          'What do you need?',
+          '你需要什么？',
+          'Can you help me choose?',
+          '顾客想请你帮忙挑选，先问他的需求。',
+          'need 表示需要。',
+          'What do …',
+          ['你需要什么？', '请把它写下来。', '我还没有决定。']
+        ),
+        make(
+          'use-for',
+          'What will you use it for?',
+          '你打算用它做什么？',
+          "I'd like a speaker.",
+          '对方想要一个音箱，问问打算怎么用。',
+          'use it for 是用它做某事。',
+          'What will …',
+          ['你打算用它做什么？', '请把它写下来。', '我还没有决定。']
+        ),
+      ],
+    },
+    {
+      id: 'meeting',
+      title: '约一个时间',
+      goal: '提出时间并确认安排',
+      expressions: [
+        make(
+          'meet-time',
+          'Can we meet tomorrow?',
+          '我们明天可以见面吗？',
+          'When can we meet?',
+          '对方想约时间，试着提议明天。',
+          'tomorrow 表示明天。',
+          'Can we …',
+          ['我们明天可以见面吗？', '请把它写下来。', '我还没有决定。']
+        ),
+        make(
+          'three',
+          'Three works for me.',
+          '三点我方便。',
+          'How about three?',
+          '对方提议三点，告诉他这个时间合适。',
+          'works for me 表示对我合适。',
+          'Three …',
+          ['三点我方便。', '请把它写下来。', '我还没有决定。']
+        ),
+      ],
+    },
   ]
+  for (const lesson of lessons) {
+    lesson.expressions = lesson.expressions.map(e => {
+      if (!Object.hasOwn(personalFields, e.id)) return e
+      const { field } = personalFields[e.id as keyof typeof personalFields]
+      const english = profile.answers?.[field]?.trim()
+      const chinese = profile[field].trim()
+      if (!english || !chinese) return e
+      const choices = [...new Set([chinese, ...e.choices.filter(c => c !== e.chinese), '请再说一次。'])].slice(0, 3)
+      return {
+        ...e,
+        id: 'personal-' + e.id,
+        english,
+        chinese,
+        accepted: [english],
+        choices,
+        hint: english.split(/\s+/)[0] + ' …',
+        note: '这是你在“我的资料”中保存的表达。',
+        sample: false,
+      }
+    })
+  }
+  return lessons
 }
 
 // Reuse the recorded question and known answer in a different conversational setting.
 export const lessonVariant: Record<string, { expressionId: string; prompt: string }> = {
+  needs: { expressionId: 'need', prompt: '在展位前，有人请你推荐一件商品。请先问他需要什么。' },
+  meeting: { expressionId: 'meet-time', prompt: '朋友约你讨论周末的安排。请提议明天见面。' },
   introduce: { expressionId: 'name', prompt: '你第一次参加英语角，接待员要在名牌上写下你的名字。请回答他。' },
   work: { expressionId: 'sales', prompt: '在展会茶歇时，一位新朋友问起你的工作。请用学过的样例回答。' },
   product: { expressionId: 'this', prompt: '访客指着展台上的音箱，想知道这是什么。请向他介绍。' },

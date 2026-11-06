@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch, onMounted, onUnmounted } from 'vue'
 import ScenarioAudio from '@/components/scenario/ScenarioAudio.vue'
 import ScenarioRecordings from '@/components/scenario/ScenarioRecordings.vue'
 import { useScenario } from '@/core/composables/useScenario'
-import { starterLessons } from '@/core/scenario/courses'
+import { personalFields, starterLessons } from '@/core/scenario/courses'
 import {
   checkAnswer,
   cloneState,
@@ -30,6 +30,7 @@ const feedback = ref('')
 const checked = ref(false)
 const composing = ref(false)
 const profileDraft = ref<LearnerProfile>({ ...state.value.profile })
+const answerDraft = ref<NonNullable<LearnerProfile['answers']>>({})
 const pendingImport = shallowRef<ScenarioRecord | null>(null)
 const notice = ref('')
 const includeMedia = ref(true)
@@ -60,6 +61,16 @@ const choices = computed(() => {
   const options = [...(task.value?.expression.choices ?? [])]
   const offset = (task.value?.expression.id.length ?? 0) % 3
   return [...options.slice(offset), ...options.slice(0, offset)]
+})
+const recentSpeaking = computed(() => {
+  const latest = new Map<string, (typeof state.value.attempts)[number]>()
+  for (const a of state.value.attempts) {
+    if (isSpokenRating(a)) {
+      latest.delete(a.expressionId)
+      latest.set(a.expressionId, a)
+    }
+  }
+  return [...latest.values()].reverse().slice(0, 8)
 })
 const recentDays = computed(() => {
   const days = new Map<string, { count: number; self: number; independent: number }>()
@@ -108,7 +119,10 @@ const listenFeedback = computed(() =>
 )
 watch(view, () => {
   activityAt = 0
-  if (view.value === 'profile') profileDraft.value = { ...state.value.profile }
+  if (view.value === 'profile') {
+    profileDraft.value = { ...state.value.profile }
+    answerDraft.value = { ...state.value.profile.answers }
+  }
 })
 function activity() {
   const now = Date.now()
@@ -223,16 +237,28 @@ async function nextLesson() {
   view.value = 'today'
 }
 async function saveProfile() {
-  const profile = { ...profileDraft.value }
+  const profile = { ...profileDraft.value, answers: { ...answerDraft.value } }
   for (const key of ['name', 'role', 'product', 'category', 'audience', 'action'] as const)
     profile[key] = profile[key].trim().slice(0, 200)
+  for (const { field, label } of Object.values(personalFields)) {
+    const answer = profile.answers[field]?.trim()
+    if (!answer) {
+      delete profile.answers[field]
+      continue
+    }
+    if (!profile[field] || !/[a-z]/i.test(answer)) {
+      notice.value = '请为“' + label + '”填写中文意思和对应的英文句子。'
+      return
+    }
+    profile.answers[field] = answer
+  }
   if (profile.name && !/^[\p{L}\p{M} .'-]+$/u.test(profile.name)) {
     notice.value = '称呼请填写姓名，不要填入句子或特殊符号。'
     return
   }
   const ok = await change(current => ({ ...cloneState(current), profile }))
   if (ok) {
-    notice.value = '资料已保存。新的称呼从下一次新课开始使用。'
+    notice.value = '资料已保存。下一次新课将使用你保存的表达。'
     view.value = 'today'
   }
 }
@@ -417,7 +443,7 @@ onUnmounted(() => {
         </div>
         <aside class="course-list">
           <h2>从介绍自己开始</h2>
-          <p class="small">6 节短课，随时暂停，不必一次学完。</p>
+          <p class="small">{{ lessons.length }} 节短课，随时暂停，不必一次学完。</p>
           <button
             v-for="(lesson, i) in lessons"
             :key="lesson.id"
@@ -660,8 +686,10 @@ onUnmounted(() => {
       </section>
 
       <section v-if="view === 'profile'" class="settings panel">
-        <h1>把称呼换成你自己</h1>
-        <p>资料只保存在本机。称呼会用在新课中；工作和产品信息先作为练习旁注，不自动拼接成商业承诺。</p>
+        <h1>我的练习资料</h1>
+        <p>
+          资料只保存在本机。填写工作、产品、适用人群或用途的中文意思，再填对应的英文回答，即可在相关短课练习自己的句子。只填写资料时仍使用课程样例。
+        </p>
         <form @submit.prevent="saveProfile">
           <label
             v-for="field in [
@@ -681,6 +709,10 @@ onUnmounted(() => {
               :placeholder="field[0] === 'name' ? '未填写时使用练习样例 Alex' : '可留空，中文或英文均可'"
               maxlength="200"
           /></label>
+          <label v-for="item in personalFields" :key="item.field">
+            {{ item.label }}的英文回答（可选）
+            <input v-model="answerDraft[item.field]" maxlength="200" :disabled="!enabled" :placeholder="item.example" />
+          </label>
           <p class="small">课程里的销售、书、音箱等都是样例。价格、认证、交期等未知内容请先核实。</p>
           <button class="primary" :disabled="!enabled || busy" type="submit">保存资料</button>
         </form>
@@ -688,7 +720,9 @@ onUnmounted(() => {
 
       <section v-if="view === 'progress'" class="settings panel">
         <h1>看见每一次尝试</h1>
-        <p>已练过 {{ state.completedLessons.length }} / 6 节短课。这表示完成练习，不代表已经掌握。</p>
+        <p>
+          已练过 {{ state.completedLessons.length }} / {{ lessons.length }} 节短课。这表示完成练习，不代表已经掌握。
+        </p>
         <h2>最近 7 个学习日</h2>
         <p v-if="!recentDays.length">还没有练习记录，先从一句问候开始。</p>
         <ul class="review-list">
@@ -700,6 +734,18 @@ onUnmounted(() => {
             >
           </li>
         </ul>
+        <template v-if="recentSpeaking.length">
+          <h2>最近开口说过的表达</h2>
+          <ul class="review-list">
+            <li v-for="a in recentSpeaking" :key="a.id">
+              <strong>{{ a.english }}</strong>
+              <span
+                >{{ isIndependentAnswer(a) ? '独立说出' : a.outcome === 'again' ? '还需练习' : '借助提示完成' }} ·
+                最近一次自评</span
+              >
+            </li>
+          </ul>
+        </template>
         <h2>接下来复习</h2>
         <p v-if="!Object.keys(state.cards).length">完成听力和口头练习后，会分别生成复习卡。</p>
         <ul class="review-list">

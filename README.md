@@ -76,11 +76,13 @@ Designed to meet most users' vocabulary learning needs. Community contributions 
 
 ### Personal Scenario Lessons in This Fork
 
+The catalog now includes eight lessons, adding needs discovery and scheduling a meeting. Pair a Chinese meaning with your own English answer in the profile to personalize work and product lessons. The progress page shows the latest speaking self-assessment for individual expressions.
+
 The `feat/personal-scenarios` branch adds a beginner learning flow at `/scenarios`, accessible from the home page. See the [Chinese feature and fix notes](docs/README.zh-CN.md) for details.
 
-- Six lessons cover introductions, work, products, audiences, uses, and asking for clarification, with Chinese explanations, listening choices, typing, layered hints, and spoken self-assessment.
+- The first six lessons cover introductions, work, products, audiences, uses, and asking for clarification, with Chinese explanations, listening choices, typing, layered hints, and spoken self-assessment.
 - Choose 10, 15, or 25 minutes. The longer plan adds a recall task and a different conversational setting. A quick option reviews two due cards.
-- Use 27 bundled English audio samples, browser speech for personal names, and optional recording playback and retention.
+- Use 35 bundled English audio samples, browser speech for personal names and custom sentences, and optional recording playback and retention.
 - Listening and speaking have separate FSRS cards and progress statistics. Due review controls update automatically as time passes.
 - Resume saved steps, drafts, hints, and listening choices. Explicit tab takeover restores the latest saved answer.
 - Export scenario records with optional recordings, or include them in the existing full ZIP backup. Full local restores commit all modules together and roll back on write failure. Decompression enforces output limits.

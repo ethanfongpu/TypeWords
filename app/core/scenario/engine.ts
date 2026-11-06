@@ -110,7 +110,9 @@ export function startSession(
         .sort((a, b) => +new Date(a.card.due) - +new Date(b.card.due))[0]
       const recall = prior?.expression ?? expressions[0]
       const variant = lessonVariant[lesson.id]
-      const target = expressions.find(e => e.id === variant.expressionId)!
+      const target = expressions.find(
+        e => e.id === variant.expressionId || e.id === `personal-${variant.expressionId}`
+      )!
       queue.push(
         {
           id: `${id}:recall`,
@@ -124,7 +126,12 @@ export function startSession(
         {
           id: `${id}:variant`,
           kind: 'speak',
-          expression: { ...target, questionChinese: variant.prompt },
+          expression: {
+            ...target,
+            questionChinese: target.id.startsWith('personal-')
+              ? `第一次见到一位新客户。${target.questionChinese}`
+              : variant.prompt,
+          },
           skill: 'produce',
           review: false,
           extension: 'variant',

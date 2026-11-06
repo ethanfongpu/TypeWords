@@ -25,5 +25,13 @@
   "Please speak slowly.": "/scenarios/audio/slow-answer.wav",
   "How can I help?": "/scenarios/audio/slow-question.wav",
   "Let me check.": "/scenarios/audio/check-answer.wav",
-  "How much is it?": "/scenarios/audio/check-question.wav"
+  "How much is it?": "/scenarios/audio/check-question.wav",
+  "What do you need?": "/scenarios/audio/need-answer.wav",
+  "Can you help me choose?": "/scenarios/audio/need-question.wav",
+  "What will you use it for?": "/scenarios/audio/use-for-answer.wav",
+  "I'd like a speaker.": "/scenarios/audio/use-for-question.wav",
+  "Can we meet tomorrow?": "/scenarios/audio/meet-time-answer.wav",
+  "When can we meet?": "/scenarios/audio/meet-time-question.wav",
+  "Three works for me.": "/scenarios/audio/three-answer.wav",
+  "How about three?": "/scenarios/audio/three-question.wav"
 }

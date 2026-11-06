@@ -1,12 +1,13 @@
 import { get, set, update } from 'idb-keyval'
 import { freshState, cardKey } from './engine.ts'
-import { starterLessons } from './courses.ts'
+import { personalFields, starterLessons } from './courses.ts'
 import type { ScenarioRecord, ScenarioState, SavedRecording } from '../types/scenario.ts'
 
 export const SCENARIO_KEY = 'TypeWordsScenarioState:v1'
 export const SCENARIO_LOCK = 'TypeWordsScenarioWriter:v1'
 export const MAX_MEDIA_BYTES = 50 * 1024 * 1024
 const expressionIds = new Set(starterLessons().flatMap(l => l.expressions.map(e => e.id)))
+for (const id of Object.keys(personalFields)) expressionIds.add('personal-' + id)
 const lessonIds = new Set(starterLessons().map(l => l.id))
 function assert(condition: unknown, message = '场景备份内容损坏，当前记录未更改。'): asserts condition {
   if (!condition) throw new Error(message)
@@ -42,6 +43,14 @@ export function validateState(raw: unknown): ScenarioState {
     object(s.profile) &&
       ['name', 'role', 'product', 'category', 'audience', 'action'].every(k => string(s.profile[k], 200))
   )
+  if (s.profile.answers !== undefined) {
+    assert(
+      object(s.profile.answers) &&
+        Object.entries(s.profile.answers).every(
+          ([key, value]) => Object.values(personalFields).some(({ field }) => field === key) && string(value, 200)
+        )
+    )
+  }
   assert([10, 15, 25].includes(s.profile.dailyMinutes))
   assert(Array.isArray(s.attempts) && s.attempts.length <= 100000 && object(s.cards))
   const ids = new Set<string>()

@@ -10,6 +10,7 @@ export interface LearnerProfile {
   category: string
   audience: string
   action: string
+  answers?: Partial<Record<'role' | 'product' | 'audience' | 'action', string>>
   dailyMinutes: 10 | 15 | 25
 }
 export interface Expression {
