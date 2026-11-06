@@ -10,6 +10,8 @@ import {
   gradeOutcome,
   isIndependentAnswer,
   isSpokenRating,
+  latestSpokenAttempts,
+  isJudgedListening,
   startSession,
   suggestedHint,
 } from '../app/core/scenario/engine.ts'
@@ -79,6 +81,7 @@ test('failed or unplayed audio and skipped steps cannot produce listening scores
     state = commitTask(state, 's', state.session!.queue[1].id, 'good', '', undefined, now)
     assert.equal(Object.keys(state.cards).length, 0)
     assert.equal(state.attempts[1].scheduled, false)
+    assert.equal(isJudgedListening(state.attempts[1]), false)
   }
 })
 test('refresh preserves queue, current draft, corrections and maximum hints without duplicate attempts', () => {
@@ -244,4 +247,49 @@ test('personal expressions stay separate from examples and survive session and b
   assert.ok(validateState(JSON.parse(JSON.stringify(complete))).cards['personal-sales:produce'])
   delete state.profile.answers
   assert.equal(starterLessons(state.profile)[1].expressions[0].id, 'sales')
+})
+
+test('editing an answer while the previous sentence is due schedules both independently', () => {
+  const initial = freshState()
+  initial.profile.role = '我修手机。'
+  initial.profile.answers = { role: 'I repair phones.' }
+  initial.profile.dailyMinutes = 25
+  const first = finishLesson('work', initial, 'first', now)
+  const restored = validateState(JSON.parse(JSON.stringify(first)))
+  restored.profile.role = '我教音乐。'
+  restored.profile.answers = { role: 'I teach music.' }
+  const later = new Date(now.getTime() + 14 * 86400000)
+  const result = finishLesson('work', restored, 'edited', later)
+  const cards = Object.values(validateState(JSON.parse(JSON.stringify(result))).cards)
+  for (const text of ['I repair phones.', 'I teach music.']) {
+    assert.ok(cards.some(c => c.skill === 'produce' && c.expression.english === text))
+    assert.ok(
+      result.attempts.some(
+        a => a.sessionId === 'edited' && a.scheduled && a.inputMode === 'speak' && a.english === text
+      )
+    )
+  }
+  result.profile.answers = initial.profile.answers
+  assert.equal(starterLessons(result.profile, result.attempts)[1].expressions[0].id, 'personal-sales')
+  const legacy = result.attempts.map(a => ({ ...a, expressionId: a.expressionId.split('@')[0] }))
+  const texts = latestSpokenAttempts(legacy).map(a => a.english)
+  assert.ok(texts.includes('I repair phones.') && texts.includes('I teach music.'))
+  const repeat = {
+    ...legacy.find(a => a.inputMode === 'speak' && a.english === 'I teach music.')!,
+    expressionId: 'personal-sales@2',
+    english: 'I teach  music.',
+    outcome: 'again' as const,
+  }
+  const history = latestSpokenAttempts([...legacy, repeat])
+  assert.equal(history.length, texts.length)
+  assert.equal(history[0], repeat)
+})
+
+test('progress includes older expressions and counts listening assessments separately', () => {
+  let state = freshState()
+  for (const lesson of starterLessons()) state = finishLesson(lesson.id, state, lesson.id, now)
+  assert.ok(latestSpokenAttempts(state.attempts).length > 8)
+  const listening = state.attempts.filter(isJudgedListening)
+  assert.equal(listening.length, starterLessons().flatMap(l => l.expressions).length)
+  assert.equal(isJudgedListening({ ...listening[0], outcome: 'skip' }), false)
 })

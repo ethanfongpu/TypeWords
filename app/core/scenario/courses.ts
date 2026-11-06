@@ -1,4 +1,4 @@
-import type { Expression, LearnerProfile, Lesson } from '../types/scenario.ts'
+import type { Attempt, Expression, LearnerProfile, Lesson } from '../types/scenario.ts'
 
 export const defaultProfile: LearnerProfile = {
   name: '',
@@ -17,8 +17,35 @@ export const personalFields = {
   music: { field: 'action', label: '用途', example: 'You can record music.' },
 } as const
 
+// Unversioned IDs are the IDs saved by the first release of personal lessons.
+export function personalSlot(id: string): string | undefined {
+  const match = /^personal-([a-z]+)(?:@([1-9]\d{0,5}))?$/.exec(id)
+  if (match && Object.hasOwn(personalFields, match[1])) return match[1]
+}
+
+export function normalizeExpressionText(text: string) {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function personalExpressionId(slot: string, english: string, attempts: Attempt[]) {
+  const base = 'personal-' + slot
+  const answer = normalizeExpressionText(english)
+  const matches = new Map<string, boolean>()
+  for (const attempt of attempts) {
+    if (personalSlot(attempt.expressionId) !== slot) continue
+    // An older backup can already contain different sentences under one ID.
+    const same = matches.get(attempt.expressionId) !== false && normalizeExpressionText(attempt.english) === answer
+    matches.set(attempt.expressionId, same)
+  }
+  for (const [id, same] of matches) if (same) return id
+  if (!matches.has(base)) return base
+  let revision = 2
+  while (matches.has(base + '@' + revision)) revision++
+  return base + '@' + revision
+}
+
 // Original beginner course text, reviewed as complete sentences, not arbitrary slot concatenation.
-export function starterLessons(profile: LearnerProfile = defaultProfile): Lesson[] {
+export function starterLessons(profile: LearnerProfile = defaultProfile, attempts: Attempt[] = []): Lesson[] {
   const name = profile.name.trim() || 'Alex'
   const make = (
     id: string,
@@ -311,7 +338,7 @@ export function starterLessons(profile: LearnerProfile = defaultProfile): Lesson
       const choices = [...new Set([chinese, ...e.choices.filter(c => c !== e.chinese), '请再说一次。'])].slice(0, 3)
       return {
         ...e,
-        id: 'personal-' + e.id,
+        id: personalExpressionId(e.id, english, attempts),
         english,
         chinese,
         accepted: [english],

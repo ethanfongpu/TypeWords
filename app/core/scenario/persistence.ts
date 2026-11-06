@@ -1,13 +1,15 @@
 import { get, set, update } from 'idb-keyval'
 import { freshState, cardKey } from './engine.ts'
-import { personalFields, starterLessons } from './courses.ts'
+import { personalFields, personalSlot, starterLessons } from './courses.ts'
 import type { ScenarioRecord, ScenarioState, SavedRecording } from '../types/scenario.ts'
 
 export const SCENARIO_KEY = 'TypeWordsScenarioState:v1'
 export const SCENARIO_LOCK = 'TypeWordsScenarioWriter:v1'
 export const MAX_MEDIA_BYTES = 50 * 1024 * 1024
 const expressionIds = new Set(starterLessons().flatMap(l => l.expressions.map(e => e.id)))
-for (const id of Object.keys(personalFields)) expressionIds.add('personal-' + id)
+function validExpressionId(id: unknown) {
+  return typeof id === 'string' && (expressionIds.has(id) || !!personalSlot(id))
+}
 const lessonIds = new Set(starterLessons().map(l => l.id))
 function assert(condition: unknown, message = '场景备份内容损坏，当前记录未更改。'): asserts condition {
   if (!condition) throw new Error(message)
@@ -22,7 +24,7 @@ const number = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER) =>
 function validExpression(e: any) {
   return (
     object(e) &&
-    expressionIds.has(e.id) &&
+    validExpressionId(e.id) &&
     ['english', 'chinese', 'question', 'questionChinese', 'note', 'hint'].every(k => string(e[k], 2000)) &&
     Array.isArray(e.accepted) &&
     e.accepted.length > 0 &&
@@ -56,7 +58,7 @@ export function validateState(raw: unknown): ScenarioState {
   const ids = new Set<string>()
   for (const a of s.attempts) {
     assert(object(a) && string(a.id, 500) && !ids.has(a.id) && string(a.taskId, 300) && string(a.sessionId, 100))
-    assert(expressionIds.has(a.expressionId) && a.contentVersion === 1 && ['listen', 'produce'].includes(a.skill))
+    assert(validExpressionId(a.expressionId) && a.contentVersion === 1 && ['listen', 'produce'].includes(a.skill))
     assert(['learn', 'listen', 'type', 'speak'].includes(a.inputMode) && [0, 1, 2].includes(a.hint))
     assert(
       ['rule', 'self', 'practice'].includes(a.source) &&
@@ -72,11 +74,11 @@ export function validateState(raw: unknown): ScenarioState {
     assert(date(a.createdAt) && typeof a.scheduled === 'boolean')
     ids.add(a.id)
   }
-  assert(Object.keys(s.cards).length <= expressionIds.size * 2)
+  assert(Object.keys(s.cards).length <= s.attempts.length)
   for (const [key, c] of Object.entries(s.cards)) {
     assert(
       object(c) &&
-        expressionIds.has(c.expressionId) &&
+        validExpressionId(c.expressionId) &&
         ['listen', 'produce'].includes(c.skill) &&
         key === cardKey(c.expressionId, c.skill)
     )

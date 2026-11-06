@@ -1,5 +1,5 @@
 import { createEmptyCard, fsrs, Rating, type Grade } from 'ts-fsrs'
-import { defaultProfile, lessonVariant, starterLessons } from './courses.ts'
+import { defaultProfile, lessonVariant, normalizeExpressionText, personalSlot, starterLessons } from './courses.ts'
 import type { Attempt, Expression, Hint, Outcome, ScenarioState, Session, Skill, Task } from '../types/scenario.ts'
 
 export const CONTENT_VERSION = 1
@@ -82,7 +82,7 @@ export function startSession(
       initialHint: card.skill === 'listen' ? 0 : suggestedHint(next, card.expressionId),
     }
   })
-  const lessons = starterLessons(next.profile)
+  const lessons = starterLessons(next.profile, next.attempts)
   const lesson =
     options.reviewOnly || options.quick || (!options.lessonId && due.length >= 6)
       ? null
@@ -111,7 +111,7 @@ export function startSession(
       const recall = prior?.expression ?? expressions[0]
       const variant = lessonVariant[lesson.id]
       const target = expressions.find(
-        e => e.id === variant.expressionId || e.id === `personal-${variant.expressionId}`
+        e => e.id === variant.expressionId || personalSlot(e.id) === variant.expressionId
       )!
       queue.push(
         {
@@ -128,7 +128,7 @@ export function startSession(
           kind: 'speak',
           expression: {
             ...target,
-            questionChinese: target.id.startsWith('personal-')
+            questionChinese: personalSlot(target.id)
               ? `第一次见到一位新客户。${target.questionChinese}`
               : variant.prompt,
           },
@@ -177,8 +177,9 @@ export function commitTask(
   if (state.attempts.some(a => a.id === attemptId)) return state
   const next = cloneState(state)
   const session = next.session!
-  const actualOutcome =
+  let actualOutcome =
     task.kind === 'learn' || task.kind === 'type' ? (outcome === 'skip' ? 'skip' : 'practice') : outcome
+  if (task.kind === 'listen' && (!session.heard || session.audioFailed)) actualOutcome = 'skip'
   const rating = gradeOutcome(actualOutcome, session.hint)
   const key = cardKey(task.expression.id, task.skill)
   const alreadyScheduled = next.attempts.some(
@@ -201,12 +202,7 @@ export function commitTask(
     createdAt: now.toISOString(),
     scheduled: false,
   }
-  if (
-    !task.extension &&
-    rating !== null &&
-    !alreadyScheduled &&
-    !(task.kind === 'listen' && (!session.heard || session.audioFailed))
-  ) {
+  if (!task.extension && rating !== null && !alreadyScheduled) {
     const old = next.cards[key]
     next.cards[key] = {
       expressionId: task.expression.id,
@@ -246,4 +242,21 @@ export function isSpokenRating(a: Attempt) {
 }
 export function isIndependentAnswer(a: Attempt) {
   return isSpokenRating(a) && a.hint === 0 && (a.outcome === 'good' || a.outcome === 'easy')
+}
+
+export function latestSpokenAttempts(attempts: Attempt[]) {
+  const latest = new Map<string, Attempt>()
+  for (const a of attempts) {
+    if (!isSpokenRating(a)) continue
+    // Keep both texts visible even if a legacy ID was shared before upgrade.
+    const slot = personalSlot(a.expressionId)
+    const key = JSON.stringify([slot ? 'personal-' + slot : a.expressionId, normalizeExpressionText(a.english)])
+    latest.delete(key)
+    latest.set(key, a)
+  }
+  return [...latest.values()].reverse()
+}
+
+export function isJudgedListening(a: Attempt) {
+  return a.inputMode === 'listen' && a.source === 'rule' && (a.outcome === 'good' || a.outcome === 'again')
 }

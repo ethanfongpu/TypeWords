@@ -11,6 +11,8 @@ import {
   dueKeys,
   isIndependentAnswer,
   isSpokenRating,
+  latestSpokenAttempts,
+  isJudgedListening,
   localDay,
   sessionAttempts,
   startSession,
@@ -56,28 +58,21 @@ const recommended = computed(
 )
 const currentAttempts = computed(() => (session.value ? sessionAttempts(state.value, session.value) : []))
 const spoken = computed(() => currentAttempts.value.filter(isSpokenRating))
-const listened = computed(() => currentAttempts.value.filter(a => a.source === 'rule' && a.scheduled))
+const listened = computed(() => currentAttempts.value.filter(isJudgedListening))
 const choices = computed(() => {
   const options = [...(task.value?.expression.choices ?? [])]
   const offset = (task.value?.expression.id.length ?? 0) % 3
   return [...options.slice(offset), ...options.slice(0, offset)]
 })
-const recentSpeaking = computed(() => {
-  const latest = new Map<string, (typeof state.value.attempts)[number]>()
-  for (const a of state.value.attempts) {
-    if (isSpokenRating(a)) {
-      latest.delete(a.expressionId)
-      latest.set(a.expressionId, a)
-    }
-  }
-  return [...latest.values()].reverse().slice(0, 8)
-})
+const recentSpeaking = computed(() => latestSpokenAttempts(state.value.attempts))
+const speakingLimit = ref(8)
 const recentDays = computed(() => {
-  const days = new Map<string, { count: number; self: number; independent: number }>()
+  const days = new Map<string, { count: number; listening: number; self: number; independent: number }>()
   for (const a of state.value.attempts) {
     const day = localDay(new Date(a.createdAt))
-    const item = days.get(day) ?? { count: 0, self: 0, independent: 0 }
+    const item = days.get(day) ?? { count: 0, listening: 0, self: 0, independent: 0 }
     item.count++
+    if (isJudgedListening(a)) item.listening++
     if (isSpokenRating(a)) item.self++
     if (isIndependentAnswer(a)) item.independent++
     days.set(day, item)
@@ -729,15 +724,16 @@ onUnmounted(() => {
           <li v-for="[day, stats] in recentDays" :key="day">
             <strong>{{ day }}</strong
             ><span
-              >{{ stats.count }} 次练习 · {{ stats.self }} 次口头自评 · {{ stats.independent }} 次无英文提示口头回答 ·
-              有效活动 {{ Math.round((state.activityDays[day] ?? 0) / 1000) }} 秒</span
+              >{{ stats.count }} 次练习 · {{ stats.listening }} 次听力判定 · {{ stats.self }} 次口头自评 ·
+              {{ stats.independent }} 次无英文提示口头回答 · 有效活动
+              {{ Math.round((state.activityDays[day] ?? 0) / 1000) }} 秒</span
             >
           </li>
         </ul>
         <template v-if="recentSpeaking.length">
           <h2>最近开口说过的表达</h2>
           <ul class="review-list">
-            <li v-for="a in recentSpeaking" :key="a.id">
+            <li v-for="a in recentSpeaking.slice(0, speakingLimit)" :key="a.id">
               <strong>{{ a.english }}</strong>
               <span
                 >{{ isIndependentAnswer(a) ? '独立说出' : a.outcome === 'again' ? '还需练习' : '借助提示完成' }} ·
@@ -745,6 +741,9 @@ onUnmounted(() => {
               >
             </li>
           </ul>
+          <button v-if="recentSpeaking.length > speakingLimit" class="text-button" @click="speakingLimit += 8">
+            查看更多表达
+          </button>
         </template>
         <h2>接下来复习</h2>
         <p v-if="!Object.keys(state.cards).length">完成听力和口头练习后，会分别生成复习卡。</p>

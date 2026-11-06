@@ -76,7 +76,7 @@ Designed to meet most users' vocabulary learning needs. Community contributions 
 
 ### Personal Scenario Lessons in This Fork
 
-The catalog now includes eight lessons, adding needs discovery and scheduling a meeting. Pair a Chinese meaning with your own English answer in the profile to personalize work and product lessons. The progress page shows the latest speaking self-assessment for individual expressions.
+The catalog now includes eight lessons, adding needs discovery and scheduling a meeting. Pair a Chinese meaning with your own English answer in the profile to personalize work and product lessons. Editing a personal answer gives the new sentence its own review schedule. The progress page lets you expand older expressions and see daily listening assessments alongside speaking self-ratings.
 
 The `feat/personal-scenarios` branch adds a beginner learning flow at `/scenarios`, accessible from the home page. See the [Chinese feature and fix notes](docs/README.zh-CN.md) for details.
 
